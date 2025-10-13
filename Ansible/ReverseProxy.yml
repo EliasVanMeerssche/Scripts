@@ -1,0 +1,245 @@
+---
+- name: Install and configure OpenResty with multi-site reverse proxy + SSL
+  hosts: all
+  become: true
+
+  vars:
+    openresty_version: "1.27.1.2"
+    openresty_src_dir: "/tmp/openresty-{{ openresty_version }}"
+    openresty_prefix: "/usr/local/openresty"
+    nginx_conf_path: "/usr/local/openresty/nginx/conf/nginx.conf"
+    ssl_dir: "/etc/nginx/ssl"
+    ssl_common_name: "g06-thematrix.internal"
+    ssl_sans:
+      - "DNS:g06-thematrix.internal"
+      - "DNS:localhost"
+
+  tasks:
+    # ------------------------------------------------------------
+    # Essential Packages and Services
+    # ------------------------------------------------------------
+    - name: Install required packages
+      dnf:
+        name:
+          - bind-utils
+          - vim
+          - tmux
+          - perl
+          - nc
+          - traceroute
+          - gcc
+          - make
+          - pcre-devel
+          - openssl-devel
+          - zlib-devel
+        state: present
+
+
+    # ------------------------------------------------------------
+    # Build and Install OpenResty
+    # ------------------------------------------------------------
+    - name: Download OpenResty source
+      get_url:
+        url: "https://openresty.org/download/openresty-{{ openresty_version }}.tar.gz"
+        dest: "/tmp/openresty-{{ openresty_version }}.tar.gz"
+        mode: '0644'
+      when: not (openresty_prefix is exists)
+
+    - name: Extract OpenResty source
+      unarchive:
+        src: "/tmp/openresty-{{ openresty_version }}.tar.gz"
+        dest: "/tmp"
+        remote_src: true
+      when: not (openresty_prefix is exists)
+
+    - name: Build and install OpenResty
+      shell: |
+        cd {{ openresty_src_dir }}
+        ./configure --with-http_v2_module
+        make
+        make install
+      args:
+        creates: "{{ openresty_prefix }}/nginx/sbin/nginx"
+
+    - name: Add OpenResty to PATH
+      copy:
+        dest: /etc/profile.d/openresty.sh
+        content: |
+          export PATH={{ openresty_prefix }}/bin:{{ openresty_prefix }}/nginx/sbin:$PATH
+        mode: '0644'
+
+    # ------------------------------------------------------------
+    # Systemd Service
+    # ------------------------------------------------------------
+    - name: Create OpenResty systemd service
+      copy:
+        dest: /etc/systemd/system/openresty.service
+        content: |
+          [Unit]
+          Description=OpenResty
+          After=network.target
+
+          [Service]
+          Type=forking
+          PIDFile={{ openresty_prefix }}/nginx/logs/nginx.pid
+          ExecStart={{ openresty_prefix }}/nginx/sbin/nginx
+          ExecReload={{ openresty_prefix }}/nginx/sbin/nginx -s reload
+          ExecStop={{ openresty_prefix }}/nginx/sbin/nginx -s quit
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Reload systemd
+
+    # ------------------------------------------------------------
+    # Directories and Permissions
+    # ------------------------------------------------------------
+    - name: Ensure required directories exist
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ openresty_prefix }}/nginx/logs"
+        - "/run/openresty"
+        - "{{ ssl_dir }}"
+
+    - name: Touch error log
+      file:
+        path: "{{ openresty_prefix }}/nginx/logs/error.log"
+        state: touch
+        mode: '0644'
+
+    - name: Set vagrant ownership
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: vagrant
+        group: vagrant
+        recurse: true
+      loop:
+        - "{{ openresty_prefix }}"
+        - "/run/openresty"
+        - "{{ ssl_dir }}"
+
+    # ------------------------------------------------------------
+    # SSL Certificate Generation (Self-signed with SAN)
+    # ------------------------------------------------------------
+    - name: Create OpenSSL SAN configuration
+      copy:
+        dest: "{{ ssl_dir }}/openssl.cnf"
+        content: |
+          [req]
+          default_bits       = 2048
+          prompt             = no
+          default_md         = sha256
+          req_extensions     = req_ext
+          distinguished_name = dn
+
+          [dn]
+          C  = NL
+          ST = Overijssel
+          L  = Enschede
+          O  = Local
+          OU = IT
+          CN = {{ ssl_common_name }}
+
+          [req_ext]
+          subjectAltName = {{ ssl_sans | join(', ') }}
+        mode: '0644'
+
+    - name: Generate self-signed SSL key and certificate with SAN
+      command: >
+        openssl req -x509 -nodes -days 365
+        -newkey rsa:2048
+        -keyout {{ ssl_dir }}/webserver.key
+        -out {{ ssl_dir }}/webserver.crt
+        -config {{ ssl_dir }}/openssl.cnf
+      args:
+        creates: "{{ ssl_dir }}/webserver.crt"
+
+    - name: Set secure permissions on SSL files
+      file:
+        path: "{{ ssl_dir }}/{{ item }}"
+        mode: "{{ '0600' if item.endswith('.key') else '0644' }}"
+        owner: root
+        group: root
+      loop:
+        - webserver.key
+        - webserver.crt
+
+    # ------------------------------------------------------------
+    # Nginx Configuration
+    # ------------------------------------------------------------
+    - name: Deploy nginx.conf
+      copy:
+        dest: "{{ nginx_conf_path }}"
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          worker_processes  auto;
+
+          events {
+              worker_connections  1024;
+          }
+
+          http {
+              server {
+                  listen 80;
+                  listen [::]:80;
+                  server_name _;
+                  
+                  more_set_headers 'Server: Apache/2.4.1 (Unix)';
+                  return 301 https://$host$request_uri;
+              }
+
+              server_tokens off;
+              more_clear_headers X-Powered-By;
+
+              upstream site1_cluster {
+                  server localhost:8080;
+              }
+
+              server {
+                  listen 443 ssl;
+                  listen [::]:443 ssl http2;
+                  server_name _;
+
+                  ssl_certificate      {{ ssl_dir }}/webserver.crt;
+                  ssl_certificate_key  {{ ssl_dir }}/webserver.key;
+
+                  location / {
+                      proxy_pass http://site1_cluster;
+                      proxy_hide_header Server;
+                      proxy_set_header Host $host;
+                      proxy_set_header X-Real-IP $remote_addr;
+                      proxy_set_header X-Forwarded-Proto $scheme;
+                      proxy_next_upstream error timeout http_500;
+
+                      header_filter_by_lua_block {
+                          ngx.header.Server = "Apache/2.4.1 (Unix)"
+                      }
+                  }
+              }
+          }
+      notify: Restart OpenResty
+
+    # ------------------------------------------------------------
+    # Firewall + Service
+    # ------------------------------------------------------------
+
+    - name: Enable and start OpenResty
+      systemd:
+        name: openresty
+        enabled: true
+        state: restarted
+
+  handlers:
+    - name: Reload systemd
+      systemd:
+        daemon_reload: true
+
+    - name: Restart OpenResty
+      systemd:
+        name: openresty
+        state: restarted

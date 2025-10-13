@@ -1,0 +1,67 @@
+- name: Create and configure deployer user with SSH and sudo access
+  hosts: all
+  become: yes
+  vars:
+    new_user: deployer
+    ssh_pub_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG00dotN3XvmbF8YygYYx99fNkbBwO/arr1X+TeS+qqi thibeau@DESKTOP-ETJIN6C"
+    ssh_port: 22   # change to 1337 or another port if desired
+    deployer_pass_hash: "$6$cQTQq7VTILD5Armp$dm1RvzcvG2Pi0Vd9.oDMX7f3wLPPRzij6jYF3SD11i654NIgi28v20.RQLe1RR6RHXFKED.b81jzL0fPhR0hL0"
+  tasks:
+    - name: Ensure the user exists with password
+      ansible.builtin.user:
+        name: "{{ new_user }}"
+        state: present
+        shell: /bin/bash
+        create_home: yes
+        password: "{{ deployer_pass_hash }}"
+
+    - name: Grant sudo privileges
+      ansible.builtin.user:
+        name: "{{ new_user }}"
+        groups: wheel
+        append: yes
+
+    - name: Ensure wheel group has sudo privileges
+      ansible.builtin.lineinfile:
+        path: /etc/sudoers
+        regexp: '^#?%wheel'
+        line: '%wheel ALL=(ALL) ALL'
+        state: present
+        validate: 'visudo -cf %s'
+
+    - name: Create .ssh directory
+      ansible.builtin.file:
+        path: "/home/{{ new_user }}/.ssh"
+        state: directory
+        owner: "{{ new_user }}"
+        group: "{{ new_user }}"
+        mode: '0700'
+
+    - name: Add authorized key for user
+      ansible.builtin.authorized_key:
+        user: "{{ new_user }}"
+        key: "{{ ssh_pub_key }}"
+
+    - name: Harden SSH configuration
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        state: present
+        backup: yes
+      loop:
+        - { regexp: '^PasswordAuthentication', line: 'PasswordAuthentication no' }
+        - { regexp: '^ChallengeResponseAuthentication', line: 'ChallengeResponseAuthentication no' }
+        - { regexp: '^PermitRootLogin', line: 'PermitRootLogin no' }
+        - { regexp: '^#?Port', line: "Port {{ ssh_port }}" }
+
+    - name: Restart SSH service
+      ansible.builtin.service:
+        name: sshd
+        state: restarted
+
+- name: Configure RHEL/AlmaLinux base system
+  hosts: all
+  become: yes
+  roles:
+    - bertvv.rh-base
