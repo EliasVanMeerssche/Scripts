@@ -4,14 +4,6 @@
 
 set -e
 
-echo "🌿 Installing required packages..."
-sudo pacman -S --noconfirm i3-wm i3lock-color i3blocks alacritty cbonsai \
-  networkmanager gsimplecal dunst imagemagick ttf-nerd-fonts-symbols
-
-echo "🌿 Creating directories..."
-mkdir -p ~/.config/i3 ~/.config/i3blocks ~/.local/bin
-
-
 # ───────────────────────────────
 # 🍃 Create i3blocks config
 # ───────────────────────────────
@@ -56,10 +48,6 @@ EOF
 # ───────────────────────────────
 # 🍃 Finish up
 # ───────────────────────────────
-echo "✅ Setup complete!"
-echo "Reloading i3..."
-i3-msg reload >/dev/null 2>&1 || true
-i3-msg restart >/dev/null 2>&1 || true
 
 cat <<'EOF'
 
