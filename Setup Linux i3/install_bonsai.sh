@@ -4,12 +4,18 @@
 
 set -e
 
+# sudo pacman -S --needed git base-devel
+# git clone https://aur.archlinux.org/yay.git
+# cd yay
+# makepkg -si
+# yay -S cbonsai
+# yay -S i3lock-color
+
 echo "🌿 Installing required packages..."
-sudo pacman -S --noconfirm i3-wm i3lock-color i3blocks alacritty cbonsai \
-  networkmanager gsimplecal dunst imagemagick ttf-nerd-fonts-symbols
+sudo pacman -S --noconfirm i3blocks alacritty networkmanager gsimplecal dunst imagemagick ttf-nerd-fonts-symbols
 
 echo "🌿 Creating directories..."
-mkdir -p ~/.config/i3 ~/.config/i3blocks ~/.local/bin
+mkdir -p ~/.config/i3blocks ~/.local/bin
 
 # ───────────────────────────────
 # 🍃 Create the bonsai lock script
