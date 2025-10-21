@@ -1,0 +1,22 @@
+~/.config/i3/config
+bindsym $mod+Shift+l exec ~/.local/bin/bonsai-lock
+
+exec --no-startup-id dunst
+exec --no-startup-id nm-applet
+exec --no-startup-id mpd
+
+bar {
+	font pango:JetBrainsMono Nerd Font 11
+    status_command i3blocks
+}
+
+# Pulse Audio controls
+bindsym XF86AudioRaiseVolume exec --no-startup-id amixer -q sset Master 3%+
+bindsym XF86AudioLowerVolume exec --no-startup-id amixer -q sset Master 3%-
+bindsym XF86AudioMute exec --no-startup-id amixer -q sset Master toggle # mute sound
+
+# Sreen brightness controls
+bindsym XF86MonBrightnessUp exec xbacklight -inc 5 # increase screen brightness
+bindsym XF86MonBrightnessDown exec xbacklight -dec 5 # decrease screen brightness
+
+https://github.com/TxGVNN/i3-config/blob/master/config
